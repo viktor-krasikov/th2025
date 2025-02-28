@@ -5,6 +5,10 @@ app = FastAPI()
 
 data = pd.read_excel('./data/TenderHack_20250228_1900.xlsx', sheet_name=0)  # sheet_name=0 для первого листа
 
+@app.get("/")
+def hello():
+    return {"message": "Hello World"}
+
 @app.get("/winners")
 def get_winners():
     global data
