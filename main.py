@@ -1,29 +1,37 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Query
+from fastapi.responses import JSONResponse
 import pandas as pd
 from fastapi.responses import StreamingResponse
 import matplotlib.pyplot as plt
 import io
+import sqlite3
 
 app = FastAPI()
 
+print("XLS started")
 df = pd.read_excel('./data/TenderHack_20250228_1900.xlsx', sheet_name=0)  # sheet_name=0 для первого листа
+print("XLS loaded")
 
+conn = sqlite3.connect("tender.db")
 @app.get("/")
 def hello():
     return {"message": "Hello World2"}
+
 
 @app.get("/winners")
 def get_winners():
     global df
     # Загрузка данных из файла Excel (замените 'data.xlsx' на ваш файл)
     # Группируем данные по ИНН и подсчитываем количество побед
-    result = df.groupby(['ИНН победителя КС', 'Наименование победителя КС', 'Регион победителя КС']).size().reset_index(name='Количество побед')
+    result = df.groupby(['ИНН победителя КС', 'Наименование победителя КС', 'Регион победителя КС']).size().reset_index(
+        name='Количество побед')
 
     # Сортируем по количеству побед в порядке убывания и выбираем топ-100
     top_winners = result.sort_values(by='Количество побед', ascending=False).head(100)
 
     # Преобразуем результат в формат JSON
     return top_winners.to_dict(orient='records')
+
 
 @app.get("/unique_inns")
 def get_unique_inns():
@@ -39,6 +47,7 @@ def get_unique_inns():
 
 @app.get("/inns")
 def get_inns(q: str = Query(None)):
+    global df
     # Извлечение необходимых колонок
     suppliers = df[['ИНН победителя КС', 'Наименование победителя КС']].drop_duplicates()
 
