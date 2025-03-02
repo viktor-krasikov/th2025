@@ -239,35 +239,6 @@ def get_start_customers():
             "first100": first100.to_dict(orient='records')}
 
 
-@app.get('/customers')
-def get_start_customers():
-    UNIC_CITY = pd.read_sql_query(
-        '''SELECT data."Регион победителя КС"  FROM data GROUP BY data."Регион победителя КС"''', conn2)
-
-    UNIC_KPGZ = pd.read_sql_query('''SELECT data."Код КПГЗ"  FROM data GROUP BY data."Код КПГЗ"''', conn2)
-
-    UNIC_CUSTOMERS = pd.read_sql_query(
-        '''SELECT data."ИНН заказчика", data."Наименование заказчика"  FROM data GROUP BY data."ИНН заказчика"''',
-        conn2)
-
-    kpgz_code_UPD = 'null'
-    winner_region_UPD = 'null'
-    start_date_UPD = 'null'
-    end_date_UPD = 'null'
-    inn_UPD = 'null'
-
-    first100 = pd.read_sql_query(f'''SELECT data."Id КС", data.*  FROM data WHERE 
-    (data."Код КПГЗ" = {kpgz_code_UPD} OR {kpgz_code_UPD} IS NULL) AND
-    (data."Регион победителя КС" = {winner_region_UPD} OR {winner_region_UPD} IS NULL) AND
-    (data."Окончание КС" BETWEEN {start_date_UPD} AND {end_date_UPD} OR ({start_date_UPD} IS NULL AND {end_date_UPD} IS NULL)) AND
-    (data."ИНН победителя КС" = {inn_UPD} OR {inn_UPD} IS NULL) GROUP BY data."Id КС" lIMIT 100''', conn2)
-
-    return {"city": UNIC_KPGZ.to_dict(orient='records'),
-            "kpgz:": UNIC_CITY.to_dict(orient='records'),
-            "customers": UNIC_CUSTOMERS.to_dict(orient='records'),
-            "first100": first100.to_dict(orient='records')}
-
-
 @app.get("/customers/config/")
 def get_tenders(request: Request,
                 kpgz_code: str = Query(None),
@@ -420,11 +391,6 @@ def get_tenders(request: Request,
     total_sum_rounded = round(total_sum, 2)
     print(total_sum)
     conn.close()
-    # new_df = df[:100]
-
-    # df.rename(columns={'Окончание КС': '"ks_date'}, inplace=True)
-    # df.rename(columns={'Конечная цена КС (победителя в КС)': 'ks_start_price'}, inplace=True)
-    # df.rename(columns={'Начальная цена КС': '"ks_end_price'}, inplace=True)
 
 
 @app.get("/competitors")
@@ -434,12 +400,20 @@ async def get_competitors(inn: str = Query(...)):
 
     # Запрос для получения списка конкурентов
     cursor.execute('''
-        SELECT 
+        SELECT competitor_inn,
+            competitor_name,
+            competitor_region,
+            total_contracts,
+            competitor_wins,
+            supplier_wins,
+            total_contracts - (competitor_wins + supplier_wins) AS other_wins,
+            GROUP_CONCAT(DISTINCT kpgz_info) AS kpgz_info
+    FROM (
+		SELECT 
             p2.inn AS competitor_inn,
             f2.firma_name AS competitor_name,
             f2.firma_region AS competitor_region,
-            kpgz.kpgz_code,
-            kpgz.kpgz_name,
+            kpgz.kpgz_code || ' ' || kpgz.kpgz_name AS kpgz_info,
             COUNT(DISTINCT ks.ks_id) AS total_contracts,
             SUM(CASE WHEN p2.inn = ks.winner_inn THEN 1 ELSE 0 END) AS competitor_wins,
             SUM(CASE WHEN p1.inn = ks.winner_inn THEN 1 ELSE 0 END) AS supplier_wins
@@ -459,37 +433,50 @@ async def get_competitors(inn: str = Query(...)):
             p2.inn, f2.firma_name, f2.firma_region
         ORDER BY competitor_wins DESC, total_contracts DESC
         LIMIT 100
+) AS X
+GROUP BY 1, 2, 3
+ORDER BY competitor_wins DESC, total_contracts DESC
     ''', (inn,))
 
     results = cursor.fetchall()
 
     # Обработка результатов
     competitors = []
+    total_kpi = 0  # Сумма KPI по всем конкурентам
+    total_contracts_all = 0  # Общее количество контрактов по всем конкурентам
+
     for row in results:
         total_contracts = row['total_contracts']
         competitor_wins = row['competitor_wins']
         supplier_wins = row['supplier_wins']
+        other_wins = row['other_wins']
 
         competitor_percentage = (competitor_wins / total_contracts * 100) if total_contracts > 0 else 0
         supplier_percentage = (supplier_wins / total_contracts * 100) if total_contracts > 0 else 0
+        other_percentage = (other_wins / total_contracts * 100) if total_contracts > 0 else 0
+
+        # Подсчет KPI
+        total_kpi += supplier_percentage * total_contracts
+        total_contracts_all += total_contracts
 
         competitors.append({
             "competitor_inn": row['competitor_inn'],
             "competitor_name": row['competitor_name'],
             "competitor_region": row['competitor_region'],
-            "kpgz_code": row['kpgz_code'],
-            "kpgz_name": row['kpgz_name'],
+            "kpgz_info": row['kpgz_info'],
             "total_contracts": total_contracts,
             "competitor_wins": competitor_wins,
             "competitor_win_percentage": round(competitor_percentage, 2),
             "supplier_wins": supplier_wins,
-            "supplier_win_percentage": round(supplier_percentage, 2)
+            "supplier_win_percentage": round(supplier_percentage, 2),
+            "other_wins": other_wins,
+            "other_win_percentage": round(other_percentage, 2)
         })
-
-    return JSONResponse(content={"competitors": competitors})
+    average_kpi = (total_kpi / total_contracts_all) if total_contracts_all > 0 else 0
+    return JSONResponse(content={"kpi": round(average_kpi, 2), "competitors": competitors})
 
 
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host="127.0.0.1", port=5007)
+    uvicorn.run(app, host="127.0.0.1", port=5009)
